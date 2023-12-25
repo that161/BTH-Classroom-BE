@@ -74,8 +74,8 @@ const DownloadStudentWithId = async (req, res) => {
 const ExportGradeBoard = async (req, res) => {
     try {
         const { slug } = req.params;
-        const cls = await Classroom.findOne({ slug }).populate('studentList');
-        const grades = await GradeDetail.find({ classroomId: cls._id });
+        const cls = await Classroom.findOne({ slug }).populate('studentList gradeStructure');
+        const grades = await GradeDetail.find({ classroomId: cls._id })
 
         if (!cls) {
             return res.status(400).json({
@@ -86,7 +86,10 @@ const ExportGradeBoard = async (req, res) => {
 
         const studentData = cls.studentList.map(student => {
             const studentGrades = grades.filter(grade => grade.studentId.toString() === student._id.toString());
-            const totalPoints = studentGrades.reduce((total, grade) => total + grade.point, 0);
+            const totalPoints = studentGrades.reduce((total, grade) => {
+                const gradeStructure = getClassGradeById(grade.gradeId, cls.gradeStructure);
+                return total + grade.point * gradeStructure.grade / 100
+            }, 0);
 
             const gradeDetails = studentGrades.reduce((details, gradeDetail, index) => {
                 const gradeStructure = getClassGradeById(gradeDetail.gradeId, cls.gradeStructure);
@@ -96,7 +99,7 @@ const ExportGradeBoard = async (req, res) => {
                 return details;
             }, {});
 
-            const averagePercentage = totalPoints / studentGrades.length;
+            const averagePercentage = Math.min(totalPoints, 10);
 
             return {
                 StudentId: student.IDStudent,
@@ -123,7 +126,6 @@ const ExportGradeBoard = async (req, res) => {
         // Loại bỏ các cột trùng lặp và giữ lại chỉ một bản sao của mỗi tên cột
         const uniqueColumns = [...new Set(allColumns)];
 
-
         const fields = [
             ...uniqueColumns.includes('StudentId') ? [] : ['StudentId'],
             ...uniqueColumns,
@@ -144,6 +146,8 @@ const ExportGradeBoard = async (req, res) => {
         });
     }
 };
+
+
 
 const DownloadSingleGradeColumn = async (req, res) => {
     try {
@@ -192,8 +196,6 @@ const DownloadSingleGradeColumn = async (req, res) => {
 };
 
 
-
-
 const UploadGradeAGradeStructure = async (req, res) => {
     try {
         const { slugClass, gradeId } = req.params;
@@ -217,8 +219,8 @@ const UploadGradeAGradeStructure = async (req, res) => {
                 }
             });
 
-        // Save grades to the database using GradeDetail model
-        const savedGrades = await Promise.all(
+        // Update or save grades to the database using GradeDetail model
+        const updatedGrades = await Promise.all(
             gradesData.map(async ({ studentId, point }) => {
                 const user = await User.findOne({ IDStudent: studentId });
                 if (!user) {
@@ -228,80 +230,174 @@ const UploadGradeAGradeStructure = async (req, res) => {
                     });
                 }
 
-                const gradeDetail = new GradeDetail({
+                // Check if the grade detail already exists
+                const existingGradeDetail = await GradeDetail.findOne({
                     classroomId: classroom._id,
                     studentId: user._id,
                     gradeId,
-                    point,
-                    hasReviewed: false,
                 });
 
-                return gradeDetail.save();
+                if (existingGradeDetail) {
+                    // Update the existing grade detail
+                    existingGradeDetail.point = point;
+                    return existingGradeDetail.save();
+                } else {
+                    // Create a new grade detail
+                    const gradeDetail = new GradeDetail({
+                        classroomId: classroom._id,
+                        studentId: user._id,
+                        gradeId,
+                        point,
+                        hasReviewed: false,
+                    });
+
+                    return gradeDetail.save();
+                }
             })
         );
 
-        res.status(200).json({ message: 'Grades uploaded successfully', data: savedGrades });
+        const newdata = await getAllPointInClass(slugClass);
+
+        res.status(200).json({
+            success: true,
+            message: 'Grades uploaded successfully',
+            data: newdata
+        });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Internal Server Error' });
+        res.status(500).json({
+            success: false,
+            message: 'Internal Server Error'
+        });
     }
 };
 
 const getAllPointInClass = async (slug) => {
     try {
-        const classroom = await Classroom.findOne({ slug }).populate('gradeStructure');
+        const classroom = await Classroom.findOne({ slug }).populate('gradeStructure').populate('studentList');
 
         if (!classroom) {
             return;
         }
+
+        // Lấy tất cả điểm của lớp học
         const studentGrades = await GradeDetail.find({
             classroomId: classroom._id,
         }).populate({
             path: 'studentId',
             model: 'User',
-            select: 'IDStudent fullname',
+            select: 'IDStudent fullname', // Chọn các trường cần thiết từ bảng User
         });
 
+        // Tạo một đối tượng Map để gom nhóm theo sinh viên
         const groupedGrades = new Map();
 
+        // Duyệt qua mảng studentGrades và gom nhóm theo sinh viên
         studentGrades.forEach(gradeDetail => {
             if (gradeDetail.gradeId !== null) {
                 const gradeInfo = getClassGradeById(gradeDetail.gradeId, classroom.gradeStructure);
 
                 if (gradeInfo !== null) {
                     const { _id, title, grade, isFinalized } = gradeInfo;
-                    const { studentId, point, IDStudent, fullname } = gradeDetail;
+                    const { studentId, IDStudent, fullname } = gradeDetail;
 
-                    if (!groupedGrades.has(_id)) {
-                        groupedGrades.set(_id, {
+                    if (!groupedGrades.has(studentId)) {
+                        groupedGrades.set(studentId, {
+                            dataStudent: studentId,
+                            IDStudent: IDStudent,
+                            fullname: fullname,
+                            grades: [],
+                        });
+                    }
+
+                    // Kiểm tra xem cột điểm đã tồn tại trong mảng grades của sinh viên hay chưa
+                    const existingGradeIndex = groupedGrades.get(studentId).grades.findIndex(
+                        grade => grade.idGradeStructure.toString() === _id.toString()
+                    );
+
+                    // Nếu đã tồn tại, cập nhật điểm; nếu chưa, thêm mới vào mảng
+                    if (existingGradeIndex !== -1) {
+                        groupedGrades.get(studentId).grades[existingGradeIndex].point = gradeDetail.point !== null ? gradeDetail.point : null;
+                    } else {
+                        groupedGrades.get(studentId).grades.push({
                             idGradeStructure: _id,
                             columnName: title,
                             percentage: grade,
                             isFinalized: isFinalized,
-                            students: [],
+                            point: gradeDetail.point !== null ? gradeDetail.point : null,
                         });
                     }
-
-                    groupedGrades.get(_id).students.push({
-                        dataStudent: studentId,
-                        point: point,
-                        IDStudent: IDStudent,
-                        fullname: fullname,
-                    });
                 }
             }
         });
 
-        // Chuyển Map thành mảng và chọn thuộc tính cần thiết
-        const result = Array.from(groupedGrades.values()).map(item => ({
-            idGradeStructure: item.idGradeStructure,
-            columnName: item.columnName,
-            percentage: item.percentage,
-            isFinalized: item.isFinalized,
-            students: item.students,
-        }));
+        // Thêm các cột điểm chưa có điểm vào mảng grades với point = null
+        classroom.gradeStructure.forEach(grade => {
+            const gradeId = grade._id.toString();
+            if (groupedGrades.size != 0) {
+                groupedGrades.forEach(student => {
+                    // Kiểm tra xem cột điểm đã tồn tại trong mảng grades của sinh viên hay chưa
+                    const existingGradeIndex = student.grades.findIndex(gradeDetail => gradeDetail.idGradeStructure.toString() === gradeId);
 
-        return result;
+                    if (existingGradeIndex === -1) {
+                        student.grades.push({
+                            idGradeStructure: gradeId,
+                            columnName: grade.title,
+                            percentage: grade.grade,
+                            isFinalized: false,
+                            point: null,
+                        });
+                    }
+                });
+            } else {
+                // Thêm sinh viên chưa có điểm vào danh sách kết quả với điểm là null
+                classroom.studentList.forEach(student => {
+                    const studentId = student._id.toString();
+                    if (!groupedGrades.has(studentId)) {
+                        groupedGrades.set(studentId, {
+                            dataStudent: {
+                                _id: studentId,
+                                IDStudent: student.IDStudent,
+                                fullname: student.fullname,
+                            },
+                            grades: classroom.gradeStructure.map(grade => ({
+                                idGradeStructure: grade._id,
+                                columnName: grade.title,
+                                percentage: grade.grade,
+                                isFinalized: false,
+                                point: null,
+                            })),
+                        });
+                    }
+                });
+            }
+
+        });
+
+
+
+        // Tính điểm trung bình và cập nhật vào kết quả trả về
+        const result = Array.from(groupedGrades.values()).map(item => {
+            const totalPoints = item.grades.reduce((total, grade) => total + (grade.point !== null ? grade.point : 0) * (grade.percentage / 100), 0);
+
+            const averagePoint = parseFloat(totalPoints.toFixed(2));
+
+            const cappedAveragePoint = Math.min(averagePoint, 10);
+
+            return {
+                dataStudent: item.dataStudent,
+                IDStudent: item.IDStudent,
+                fullname: item.fullname,
+                grades: item.grades,
+                averagePoint: cappedAveragePoint,
+            };
+        });
+
+        return {
+            gradeStructure: classroom.gradeStructure,
+            studentGrades: result,
+        };
+
     } catch (error) {
         console.error(error);
         return;
@@ -312,7 +408,7 @@ const getAllClassroomGrades = async (req, res) => {
     try {
         const { slug } = req.params;
 
-        const classroom = await Classroom.findOne({ slug }).populate('gradeStructure');
+        const classroom = await Classroom.findOne({ slug }).populate('gradeStructure').populate('studentList');
 
         if (!classroom) {
             return res.status(400).json({
@@ -330,51 +426,116 @@ const getAllClassroomGrades = async (req, res) => {
             select: 'IDStudent fullname', // Chọn các trường cần thiết từ bảng User
         });
 
-        // Tạo một đối tượng Map để gom nhóm theo idGradeStructure
+        // Tạo một đối tượng Map để gom nhóm theo sinh viên
         const groupedGrades = new Map();
 
-        // Duyệt qua mảng studentGrades và gom nhóm theo idGradeStructure
+        // Duyệt qua mảng studentGrades và gom nhóm theo sinh viên
         studentGrades.forEach(gradeDetail => {
             if (gradeDetail.gradeId !== null) {
                 const gradeInfo = getClassGradeById(gradeDetail.gradeId, classroom.gradeStructure);
 
                 if (gradeInfo !== null) {
                     const { _id, title, grade, isFinalized } = gradeInfo;
-                    const { studentId, point, IDStudent, fullname } = gradeDetail;
+                    const { studentId, IDStudent, fullname } = gradeDetail;
 
-                    if (!groupedGrades.has(_id)) {
-                        groupedGrades.set(_id, {
+                    if (!groupedGrades.has(studentId)) {
+                        groupedGrades.set(studentId, {
+                            dataStudent: studentId,
+                            IDStudent: IDStudent,
+                            fullname: fullname,
+                            grades: [],
+                        });
+                    }
+
+                    // Kiểm tra xem cột điểm đã tồn tại trong mảng grades của sinh viên hay chưa
+                    const existingGradeIndex = groupedGrades.get(studentId).grades.findIndex(
+                        grade => grade.idGradeStructure.toString() === _id.toString()
+                    );
+
+                    // Nếu đã tồn tại, cập nhật điểm; nếu chưa, thêm mới vào mảng
+                    if (existingGradeIndex !== -1) {
+                        groupedGrades.get(studentId).grades[existingGradeIndex].point = gradeDetail.point !== null ? gradeDetail.point : null;
+                    } else {
+                        groupedGrades.get(studentId).grades.push({
                             idGradeStructure: _id,
                             columnName: title,
                             percentage: grade,
                             isFinalized: isFinalized,
-                            students: [],
+                            point: gradeDetail.point !== null ? gradeDetail.point : null,
                         });
                     }
-
-                    // Thêm thông tin của sinh viên và điểm vào mảng tương ứng với idGradeStructure
-                    groupedGrades.get(_id).students.push({
-                        dataStudent: studentId,
-                        point: point,
-                        IDStudent: IDStudent,
-                        fullname: fullname,
-                    });
                 }
             }
         });
 
-        // Chuyển Map thành mảng và chọn thuộc tính cần thiết
-        const result = Array.from(groupedGrades.values()).map(item => ({
-            idGradeStructure: item.idGradeStructure,
-            columnName: item.columnName,
-            percentage: item.percentage,
-            isFinalized: item.isFinalized,
-            students: item.students,
-        }));
+        // Thêm các cột điểm chưa có điểm vào mảng grades với point = null
+        classroom.gradeStructure.forEach(grade => {
+            const gradeId = grade._id.toString();
+            if (groupedGrades.size != 0) {
+                groupedGrades.forEach(student => {
+                    // Kiểm tra xem cột điểm đã tồn tại trong mảng grades của sinh viên hay chưa
+                    const existingGradeIndex = student.grades.findIndex(gradeDetail => gradeDetail.idGradeStructure.toString() === gradeId);
+
+                    if (existingGradeIndex === -1) {
+                        student.grades.push({
+                            idGradeStructure: gradeId,
+                            columnName: grade.title,
+                            percentage: grade.grade,
+                            isFinalized: false,
+                            point: null,
+                        });
+                    }
+                });
+            } else {
+                // Thêm sinh viên chưa có điểm vào danh sách kết quả với điểm là null
+                classroom.studentList.forEach(student => {
+                    const studentId = student._id.toString();
+                    if (!groupedGrades.has(studentId)) {
+                        groupedGrades.set(studentId, {
+                            dataStudent: {
+                                _id: studentId,
+                                IDStudent: student.IDStudent,
+                                fullname: student.fullname,
+                            },
+                            grades: classroom.gradeStructure.map(grade => ({
+                                idGradeStructure: grade._id,
+                                columnName: grade.title,
+                                percentage: grade.grade,
+                                isFinalized: false,
+                                point: null,
+                            })),
+                        });
+                    }
+                });
+            }
+
+        });
+
+
+
+        // Tính điểm trung bình và cập nhật vào kết quả trả về
+        const result = Array.from(groupedGrades.values()).map(item => {
+            const totalPoints = item.grades.reduce((total, grade) => total + (grade.point !== null ? grade.point : 0) * (grade.percentage / 100), 0);
+
+            const averagePoint = parseFloat(totalPoints.toFixed(2));
+
+            const cappedAveragePoint = Math.min(averagePoint, 10);
+
+            return {
+                dataStudent: item.dataStudent,
+                IDStudent: item.IDStudent,
+                fullname: item.fullname,
+                grades: item.grades,
+                averagePoint: cappedAveragePoint,
+            };
+        });
 
         res.status(200).json({
             success: true,
-            data: result
+            data: {
+                gradeStructure: classroom.gradeStructure,
+                studentGrades: result,
+            },
         });
     } catch (error) {
         console.error(error);
@@ -384,6 +545,7 @@ const getAllClassroomGrades = async (req, res) => {
         });
     }
 };
+
 
 
 const AddOrUpdateGrade = async (req, res) => {
@@ -477,7 +639,7 @@ const UpdateGradesFull = async (req, res) => {
 
         // Duyệt qua danh sách điểm cần cập nhật
         for (const gradeData of grades) {
-            const { idStudent, idGradeStructure, point } = gradeData;
+            const { idStudent, grades: studentGrades } = gradeData;
 
             // Kiểm tra xem sinh viên có trong lớp học không
             const isStudentInClass = classroom.studentList.includes(idStudent);
@@ -489,39 +651,44 @@ const UpdateGradesFull = async (req, res) => {
                 });
             }
 
-            // Kiểm tra xem gradestructure có trong lớp học không
-            const isGradeStructureInClass = classroom.gradeStructure.some(
-                grade => grade._id.toString() === idGradeStructure
-            );
+            // Duyệt qua điểm của sinh viên
+            for (const studentGrade of studentGrades) {
+                const { idGradeStructure, point } = studentGrade;
 
-            if (!isGradeStructureInClass) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Grade structure not found in the class'
-                });
-            }
+                // Kiểm tra xem gradestructure có trong lớp học không
+                const isGradeStructureInClass = classroom.gradeStructure.some(
+                    grade => grade._id.toString() === idGradeStructure
+                );
 
-            // Kiểm tra xem điểm đã tồn tại chưa
-            let gradeDetail = await GradeDetail.findOne({
-                classroomId: classroom._id,
-                studentId: idStudent,
-                gradeId: idGradeStructure,
-            });
+                if (!isGradeStructureInClass) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Grade structure not found in the class'
+                    });
+                }
 
-            if (!gradeDetail) {
-                // Nếu chưa có điểm, tạo mới
-                gradeDetail = new GradeDetail({
+                // Kiểm tra xem điểm đã tồn tại chưa
+                let gradeDetail = await GradeDetail.findOne({
                     classroomId: classroom._id,
                     studentId: idStudent,
                     gradeId: idGradeStructure,
-                    point: point,
                 });
 
-                await gradeDetail.save();
-            } else {
-                // Nếu đã có điểm, cập nhật
-                gradeDetail.point = point;
-                await gradeDetail.save();
+                if (!gradeDetail) {
+                    // Nếu chưa có điểm, tạo mới
+                    gradeDetail = new GradeDetail({
+                        classroomId: classroom._id,
+                        studentId: idStudent,
+                        gradeId: idGradeStructure,
+                        point: point,
+                    });
+
+                    await gradeDetail.save();
+                } else {
+                    // Nếu đã có điểm, cập nhật
+                    gradeDetail.point = point;
+                    await gradeDetail.save();
+                }
             }
         }
 
@@ -540,9 +707,6 @@ const UpdateGradesFull = async (req, res) => {
 };
 
 
-
-
-
 const getClassGradeById = (gradeId, gradeStructure) => {
     const foundGrade = gradeStructure.find(grade => grade._id.toString() === gradeId.toString());
 
@@ -557,7 +721,6 @@ const getClassGradeById = (gradeId, gradeStructure) => {
 };
 
 const GetGradeAStudent = async (req, res) => {
-
     try {
         const userId = req.user._id;
         const { slugClass } = req.params;
@@ -577,41 +740,54 @@ const GetGradeAStudent = async (req, res) => {
             studentId: userId,
         });
 
-        if (!studentGrades || studentGrades.length === 0) {
-            return res.status(400).json({
-                success: false,
-                message: 'No finalized grades found for the student'
-            });
-        }
+        const totalPoints = studentGrades.reduce((total, grade) => {
+            const gradeStructure = getClassGradeById(grade.gradeId, classroom.gradeStructure);
+            if (gradeStructure && gradeStructure.isFinalized) {
+                return total + (grade.point || 0) * (gradeStructure.grade / 100);
+            } else {
+                return total;
+            }
+        }, 0);
 
         const formattedGrades = await Promise.all(
-            studentGrades
-                .filter(gradeDetail => gradeDetail.gradeId !== null)
-                .map(async gradeDetail => {
-                    const gradeInfo = getClassGradeById(gradeDetail.gradeId, classroom.gradeStructure);
+            classroom.gradeStructure.map(async gradeStructure => {
+                const gradeDetail = studentGrades.find(grade => grade.gradeId.toString() === gradeStructure._id.toString());
 
-                    if (gradeInfo !== null) {
-                        const { _id, title, grade, isFinalized } = gradeInfo;
-                        if (isFinalized) {
-                            return {
-                                _id: _id,
-                                columnName: title,
-                                percentage: grade,
-                                isFinalized: isFinalized,
-                                numericalGrade: gradeDetail.point,
-                            };
-                        }
-                    }
-
-                    return null;
-                })
+                if (gradeDetail) {
+                    return {
+                        _id: gradeStructure._id,
+                        columnName: gradeStructure.title,
+                        percentage: gradeStructure.grade,
+                        isFinalized: gradeStructure.isFinalized,
+                        point: gradeDetail.point,
+                    };
+                } else {
+                    return {
+                        _id: gradeStructure._id,
+                        columnName: gradeStructure.title,
+                        percentage: gradeStructure.grade,
+                        isFinalized: gradeStructure.isFinalized,
+                        point: null,
+                    };
+                }
+            })
         );
 
-        const finalFormattedGrades = formattedGrades.filter(Boolean);
+        // Get student information
+        const studentInfo = await User.findById(userId, 'fullname IDStudent');
 
         res.status(200).json({
             success: true,
-            data: finalFormattedGrades
+            data: {
+                gradeStructure: classroom.gradeStructure,
+                studentGrades: [
+                    {
+                        dataStudent: studentInfo,
+                        grades: formattedGrades,
+                        averagePoint: totalPoints
+                    }
+                ],
+            },
         });
     } catch (error) {
         console.error(error);
@@ -620,7 +796,10 @@ const GetGradeAStudent = async (req, res) => {
             message: 'Internal Server Error'
         });
     }
-}
+};
+
+
+
 
 
 module.exports = {
