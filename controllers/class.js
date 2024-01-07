@@ -2,6 +2,7 @@ const crypto = require("crypto");
 require("dotenv").config();
 const Classroom = require("../model/class");
 const User_class = require("../model/user_class");
+const Notification = require("../model/notification");
 const User = require("../model/user");
 const Pending_Invite = require("../model/pending_invite");
 const generateRandom = require("../helpers/generateRandom");
@@ -30,9 +31,15 @@ const getAllInfo = async (req, res) => {
       });
 
     if (!classInfo) {
-      return res.status(404).json({
+      return res.status(400).json({
         success: false,
         message: "Class not found",
+      });
+    }
+    if (!classInfo.isActived) {
+      return res.status(400).json({
+        success: false,
+        message: "Class is not actived. Please contact to admin!",
       });
     }
 
@@ -42,7 +49,7 @@ const getAllInfo = async (req, res) => {
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({
+    res.status(4000).json({
       success: false,
       error: "Internal Server Error",
     });
@@ -487,30 +494,6 @@ const joinClassByLink = async (req, res) => {
   }
 };
 
-const getListClassRoleTeacher = async (req, res) => {
-  try {
-    const userId = req.user._id;
-
-    const userClasses = await User_class.find({
-      userID: userId,
-      Role: "teacher",
-    }).populate("classID");
-
-    const classes = userClasses.map((userClassroom) => {
-      return {
-        _id: userClassroom.classID._id,
-        title: userClassroom.classID.title,
-        subTitle: userClassroom.classID.subTitle,
-        role: userClassroom.Role,
-      };
-    });
-
-    res.status(200).json({ classes });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-};
 
 const getListUserOfClass = async (req, res) => {
   try {
@@ -556,32 +539,6 @@ const getListUserOfClass = async (req, res) => {
     });
   }
 };
-
-const getListClassRoleStudent = async (req, res) => {
-  try {
-    const userId = req.user._id;
-
-    const userClasses = await User_class.find({
-      userID: userId,
-      Role: "student",
-    }).populate("classID");
-
-    const classes = userClasses.map((userClassroom) => {
-      return {
-        _id: userClassroom.classID._id,
-        title: userClassroom.classID.title,
-        subTitle: userClassroom.classID.subTitle,
-        role: userClassroom.Role,
-      };
-    });
-
-    res.status(200).json({ classes });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Internal Server Error" });
-  }
-};
-
 const getListClassOfUser = async (req, res) => {
   try {
     const userId = req.user._id;
@@ -624,10 +581,10 @@ const getListClassOfUser = async (req, res) => {
 };
 
 const createOrUpdateGradeStructure = async (req, res) => {
-  const { slug } = req.params;
-  const gradeStructures = req.body;
-
   try {
+    const { slug } = req.params;
+    const gradeStructures = req.body;
+
     if (!gradeStructures || gradeStructures.length === 0) {
       return res.status(400).json({
         success: false,
@@ -644,21 +601,32 @@ const createOrUpdateGradeStructure = async (req, res) => {
         .filter(grade => !gradeStructures.some(newGrade => newGrade._id && newGrade._id.toString() === grade._id.toString()))
         .map(grade => grade._id.toString());
 
-      // Remove grades not present in the updated list
-      classDetails.gradeStructure = existingGradeStructure.filter(existingGrade => {
-        return gradeStructures.some(newGrade => newGrade._id && newGrade._id.toString() === existingGrade._id.toString());
-      });
 
-      // Add new grades
-      const newGrades = gradeStructures.filter(newGrade => !newGrade._id);
-      classDetails.gradeStructure.push(...newGrades);
+      const validGradeStructures = gradeStructures.filter(item => item._id !== "");
 
-      // Update the class with the modified grade structure
-      const updatedClass = await Classroom.findByIdAndUpdate(
-        classDetails._id,
+      const updatedClass = await Classroom.findOneAndUpdate(
+        { _id: classDetails._id },
         {
           $set: {
-            gradeStructure: classDetails.gradeStructure,
+            gradeStructure: validGradeStructures,
+          },
+        },
+        { new: true }
+      );
+
+      await updatedClass.save();
+
+      const classDetailReturn = await Classroom.findOne({ slug: slug });
+
+      // Add new grades
+      const newGrades = gradeStructures.filter(newGrade => !newGrade._id || !existingGradeStructure.some(existingGrade => existingGrade._id.toString() === newGrade._id.toString()));
+      classDetailReturn.gradeStructure.push(...newGrades);
+
+      const updated = await Classroom.findOneAndUpdate(
+        { _id: classDetailReturn._id },
+        {
+          $set: {
+            gradeStructure: classDetailReturn.gradeStructure,
           },
         },
         { new: true }
@@ -673,7 +641,7 @@ const createOrUpdateGradeStructure = async (req, res) => {
       return res.status(200).json({
         success: true,
         message: "Create or Update Grade Structure Successfully",
-        data: updatedClass,
+        data: updated,
       });
     }
   } catch (error) {
@@ -684,6 +652,8 @@ const createOrUpdateGradeStructure = async (req, res) => {
     });
   }
 };
+
+
 
 
 const FinalizedGradeStructure = async (req, res) => {
@@ -712,6 +682,24 @@ const FinalizedGradeStructure = async (req, res) => {
 
     await classroom.save();
 
+    // Get all students in the classroom
+    const students = await User.find({ _id: { $in: classroom.studentList } });
+
+    // Create a notification for each student
+    const notifications = students.map(student => {
+      return new Notification({
+        senderId: req.user._id,  // ID của người thực hiện thao tác (giáo viên)
+        receiverId: student._id,
+        objectId: composition._id,
+        objectName: 'Grade Composition',
+        message: `The grade composition for ${composition.title} in class ${classroom.title} has been finalized.`,
+        url: `${process.env.CLIENT}/${classroom.slug}`  // Điều hướng URL tới trang phù hợp
+      });
+    });
+
+    // Save all notifications
+    await Notification.insertMany(notifications);
+
     res.status(200).json({
       success: true,
       message: 'Grade composition marked as finalized'
@@ -730,8 +718,6 @@ const FinalizedGradeStructure = async (req, res) => {
 
 module.exports = {
   createNewClass,
-  getListClassRoleTeacher,
-  getListClassRoleStudent,
   getListClassOfUser,
   joinClassByCode,
   joinClassByLink,
