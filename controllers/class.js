@@ -159,7 +159,7 @@ const joinClassByCode = async (req, res) => {
       message: "User joined the class successfully",
     });
   } catch (error) {
-    res.status(500).json({
+    res.status(400).json({
       success: false,
       message: "Internal Server Error",
     });
@@ -198,7 +198,7 @@ const checkUserInClass = async (req, res) => {
       });
     }
   } catch (error) {
-    res.status(500).json({
+    res.status(400).json({
       success: false,
       message: "Internal Server Error",
     });
@@ -487,7 +487,7 @@ const joinClassByLink = async (req, res) => {
       data: classDetails
     });
   } catch (error) {
-    res.status(500).json({
+    res.status(400).json({
       success: false,
       message: "Internal Server Error",
     });
@@ -533,7 +533,7 @@ const getListUserOfClass = async (req, res) => {
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({
+    res.status(400).json({
       success: false,
       message: "Internal Server Error",
     });
@@ -564,6 +564,7 @@ const getListClassOfUser = async (req, res) => {
           name: userClassroom.classID.owner.fullname,
           avatar: userClassroom.classID.owner.avatar,
         },
+        isActived: userClassroom.classID.isActived
       };
     });
 
@@ -573,7 +574,7 @@ const getListClassOfUser = async (req, res) => {
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({
+    res.status(400).json({
       success: false,
       error: "Internal Server Error",
     });
@@ -646,7 +647,7 @@ const createOrUpdateGradeStructure = async (req, res) => {
     }
   } catch (error) {
     console.error(error);
-    return res.status(500).json({
+    return res.status(400).json({
       success: false,
       message: "Server error",
     });
@@ -693,12 +694,18 @@ const FinalizedGradeStructure = async (req, res) => {
         objectId: composition._id,
         objectName: 'Grade Composition',
         message: `The grade composition for ${composition.title} in class ${classroom.title} has been finalized.`,
-        url: `${process.env.CLIENT}/${classroom.slug}`  // Điều hướng URL tới trang phù hợp
+        url: `/class/${classroom.slug}?tab=3`  // Điều hướng URL tới trang phù hợp
       });
     });
 
     // Save all notifications
     await Notification.insertMany(notifications);
+
+    const io = req.app.get("io");
+    io.emit("newNotify", {
+      success: true,
+      message: `New Notify`,
+    });
 
     res.status(200).json({
       success: true,
@@ -706,7 +713,7 @@ const FinalizedGradeStructure = async (req, res) => {
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({
+    res.status(400).json({
       success: false,
       message: 'Internal Server Error'
     });

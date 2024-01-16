@@ -116,7 +116,7 @@ const DownloadStudentWithIdAndName = async (req, res) => {
         res.status(200).send(csv);
     } catch (error) {
         console.error(error);
-        res.status(500).json({
+        res.status(400).json({
             success: false,
             message: 'Internal Server Error'
         });
@@ -148,7 +148,7 @@ const DownloadStudentWithId = async (req, res) => {
         res.status(200).send(csv);
     } catch (error) {
         console.error(error);
-        res.status(500).json({
+        res.status(400).json({
             success: false,
             message: 'Internal Server Error'
         });
@@ -225,7 +225,7 @@ const ExportGradeBoard = async (req, res) => {
         res.status(200).send(csv);
     } catch (error) {
         console.error(error);
-        res.status(500).json({
+        res.status(400).json({
             success: false,
             message: 'Internal Server Error'
         });
@@ -273,7 +273,7 @@ const DownloadSingleGradeColumn = async (req, res) => {
         res.status(200).send(csv);
     } catch (error) {
         console.error(error);
-        res.status(500).json({
+        res.status(400).json({
             success: false,
             message: 'Internal Server Error'
         });
@@ -299,8 +299,10 @@ const UploadGradeAGradeStructure = async (req, res) => {
             .split('\n')
             .forEach(row => {
                 const [studentId, point] = row.split(',');
-                if (studentId && point) {
-                    gradesData.push({ studentId, point: parseFloat(point) });
+                const cleanedStudentId = studentId.trim();
+
+                if (cleanedStudentId && point) {
+                    gradesData.push({ studentId: cleanedStudentId, point: parseFloat(point) });
                 }
             });
 
@@ -350,7 +352,7 @@ const UploadGradeAGradeStructure = async (req, res) => {
         });
     } catch (error) {
         console.error(error);
-        res.status(500).json({
+        res.status(400).json({
             success: false,
             message: 'Internal Server Error'
         });
@@ -675,7 +677,7 @@ const getAllClassroomGrades = async (req, res) => {
         });
     } catch (error) {
         console.error(error);
-        res.status(500).json({
+        res.status(400).json({
             success: false,
             message: 'Internal Server Error'
         });
@@ -751,7 +753,7 @@ const AddOrUpdateGrade = async (req, res) => {
         });
     } catch (error) {
         console.error(error);
-        res.status(500).json({
+        res.status(400).json({
             success: false,
             message: 'Internal Server Error'
         });
@@ -835,7 +837,7 @@ const UpdateGradesFull = async (req, res) => {
         });
     } catch (error) {
         console.error(error);
-        res.status(500).json({
+        res.status(400).json({
             success: false,
             message: 'Internal Server Error'
         });
@@ -935,14 +937,12 @@ const GetGradeAStudent = async (req, res) => {
         });
     } catch (error) {
         console.error(error);
-        res.status(500).json({
+        res.status(400).json({
             success: false,
             message: 'Internal Server Error'
         });
     }
 };
-
-
 
 
 

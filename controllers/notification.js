@@ -9,7 +9,7 @@ const getAllNotify = async (req, res) => {
 
         const notifications = await Notification.find({ receiverId: userId })
             .sort({ createdAt: -1 })
-            .populate('senderId', 'fullname')
+            .populate('senderId', ['fullname', 'avatar'])
             .populate('objectId')
 
         const unreadCount = notifications.filter(notification => !notification.isRead).length;
@@ -24,7 +24,7 @@ const getAllNotify = async (req, res) => {
 
     } catch (error) {
         console.error(error);
-        res.status(500).json({
+        res.status(400).json({
             success: false,
             message: 'Internal Server Error',
         });
@@ -71,6 +71,39 @@ const markNotificationAsRead = async (req, res) => {
 
     } catch (error) {
         console.error(error);
+        res.status(400).json({
+            success: false,
+            message: 'Internal Server Error',
+        });
+    }
+};
+
+const markAllNotificationsAsRead = async (req, res) => {
+    try {
+        const userId = req.user._id;
+
+        // Cập nhật tất cả thông báo của người dùng thành đã đọc
+        await Notification.updateMany({ receiverId: userId }, { $set: { isRead: true } });
+
+        // Lấy lại danh sách thông báo sau khi cập nhật
+        const notifications = await Notification.find({ receiverId: userId })
+            .sort({ createdAt: -1 })
+            .populate('senderId', ['fullname', 'avatar'])
+            .populate('objectId');
+
+        const unreadCount = 0; // Đã đọc hết nên đặt số lượng chưa đọc là 0
+
+        res.status(200).json({
+            success: true,
+            message: 'All notifications marked as read',
+            data: {
+                unreadCount,
+                notifications,
+            },
+        });
+
+    } catch (error) {
+        console.error(error);
         res.status(500).json({
             success: false,
             message: 'Internal Server Error',
@@ -78,7 +111,9 @@ const markNotificationAsRead = async (req, res) => {
     }
 };
 
+
 module.exports = {
     getAllNotify,
-    markNotificationAsRead
+    markNotificationAsRead,
+    markAllNotificationsAsRead
 };

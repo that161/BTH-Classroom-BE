@@ -72,26 +72,17 @@ const PostGradeReviewFromStudent = async (req, res) => {
                 objectId: newGradeReview._id,
                 objectName: 'Grade Review',
                 message: `Student ${student.fullname} has submitted a grade review in score colunm ${gradeStructureDetail.title}`,
-                url: `${process.env.CLIENT}/${cls.slug}`,  // Adjust the URL as needed
+                url: `/class/${cls.slug}?tab=4`,  // Adjust the URL as needed
             }));
 
             // Insert notifications into the Notification collection
             const insertedNotifications = await Notification.insertMany(notifications);
 
-            // const io = req.io;
-            // // Gửi thông báo qua Socket.IO
-            // const notificationDetails = insertedNotifications.map(notification => ({
-            //     _id: notification._id,
-            //     objectId: notification.objectId,
-            //     objectName: notification.objectName,
-            //     message: notification.message,
-            //     url: notification.url,
-            //     createdAt: notification.createdAt,
-            // }));
-
-            // teacherIds.forEach(teacherId => {
-            //     io.to(teacherId).emit('newNotification', notificationDetails);
-            // });
+            const io = req.app.get("io");
+            io.emit("newNotify", {
+                success: true,
+                message: `New Notify`,
+            });
         }
 
         res.status(200).json({
@@ -101,7 +92,7 @@ const PostGradeReviewFromStudent = async (req, res) => {
         });
     } catch (error) {
         console.error(error);
-        res.status(500).json({
+        res.status(400).json({
             success: false,
             message: 'Internal Server Error',
         });
@@ -195,7 +186,7 @@ const ViewGradeReviews = async (req, res) => {
         });
     } catch (error) {
         console.error(error);
-        res.status(500).json({
+        res.status(400).json({
             success: false,
             message: 'Internal Server Error',
         });
@@ -357,7 +348,7 @@ const ViewGradeReviewDetails = async (req, res) => {
         });
     } catch (error) {
         console.error(error);
-        res.status(500).json({
+        res.status(400).json({
             success: false,
             message: 'Internal Server Error',
         });
@@ -381,6 +372,8 @@ const MarkFinalDecision = async (req, res) => {
 
         // Update the final decision and new grade point
         review.isFinalDecision = true;
+
+        review.oldPoint = newPoint;
 
         // Save the updated review
         await review.save();
@@ -466,12 +459,17 @@ const MarkFinalDecision = async (req, res) => {
                 objectId: review._id,
                 objectName: 'Grade Review',
                 message: `Your grade review for ${dataGradeStructure.title} in class ${cls.title} has been finalized. Check the updated grade.`,
-                url: `${process.env.CLIENT}/${cls.slug}`,  // Adjust the URL as needed
+                url: `/class/${cls.slug}?tab=3`,  // Adjust the URL as needed
             });
 
             await notification.save();
         }
 
+        const io = req.app.get("io");
+        io.emit("newNotify", {
+            success: true,
+            message: `New Notify`,
+        });
 
         res.status(200).json({
             success: true,
@@ -480,7 +478,7 @@ const MarkFinalDecision = async (req, res) => {
         });
     } catch (error) {
         console.error(error);
-        res.status(500).json({
+        res.status(400).json({
             success: false,
             message: 'Internal Server Error',
         });
@@ -534,10 +532,16 @@ const AddCommentToReview = async (req, res) => {
                 objectId: reviewId,
                 objectName: 'Grade Review',
                 message: `The teacher has commented on your grade review for ${dataGradeStructure.title} in class ${cls.title}`,
-                url: `${process.env.CLIENT}/${cls.slug}`,
+                url: `/class/${cls.slug}?tab=3`,
             });
 
             await notification.save();
+
+            const io = req.app.get("io");
+            io.emit("newNotify", {
+                success: true,
+                message: `New Notify`,
+            });
         } else {
             // Gửi thông báo đến toàn bộ giáo viên trong lớp
             const teacherNotifications = cls.teacherList.map(teacherId => {
@@ -547,11 +551,17 @@ const AddCommentToReview = async (req, res) => {
                     objectId: reviewId,
                     objectName: 'Grade Review',
                     message: `Student ${review.gradeDetail.studentId.fullname} has commented in grade review for ${dataGradeStructure.title} in class ${cls.title}`,
-                    url: `${process.env.CLIENT}/${cls.slug}`,
+                    url: `/class/${cls.slug}?tab=4`,
                 });
             });
 
             await Notification.insertMany(teacherNotifications);
+
+            const io = req.app.get("io");
+            io.emit("newNotify", {
+                success: true,
+                message: `New Notify`,
+            });
         }
 
 
@@ -562,7 +572,7 @@ const AddCommentToReview = async (req, res) => {
         });
     } catch (error) {
         console.error(error);
-        res.status(500).json({
+        res.status(400).json({
             success: false,
             message: 'Internal Server Error',
         });

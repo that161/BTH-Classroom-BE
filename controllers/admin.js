@@ -17,11 +17,29 @@ const checkIsAdmin = async (_id) => {
 
 const getAllUsers = async (req, res) => {
     try {
-        const users = await User.find({ email: { $ne: 'admin' } });
+        const { pageSize, pageNumber } = req.query;
+
+        const totalUsers = await User.countDocuments({ email: { $ne: 'admin' } });
+
+        const users = await User.find({ email: { $ne: 'admin' } })
+            .skip((pageNumber - 1) * pageSize)
+            .limit(parseInt(pageSize));
+
+        // Kiểm tra và điều chỉnh dữ liệu trả về
+        const adjustedUsers = users.map(user => ({
+            ...user.toObject(),
+            IDStudent: user.IDStudent || null,
+        }));
+
         if (await checkIsAdmin(req.user._id)) {
             res.status(200).json({
                 success: true,
-                data: users,
+                data: {
+                    totalUsers,
+                    currentPage: Number(pageNumber),
+                    Userdata: adjustedUsers
+
+                },
             });
         } else {
             return res.status(400).json({
@@ -38,6 +56,9 @@ const getAllUsers = async (req, res) => {
         });
     }
 };
+
+
+
 
 
 const getDetailUser = async (req, res) => {
@@ -83,6 +104,7 @@ const toggleAccountStatus = async (req, res) => {
             res.status(200).json({
                 success: true,
                 message: `Account ${user.email} is ${user.isLocked ? 'locked' : 'unlocked'}`,
+                data: user
             });
         } else {
             return res.status(400).json({
@@ -94,7 +116,7 @@ const toggleAccountStatus = async (req, res) => {
 
     } catch (error) {
         console.error(error);
-        res.status(500).json({
+        res.status(400).json({
             success: false,
             message: 'Internal Server Error',
         });
@@ -103,40 +125,35 @@ const toggleAccountStatus = async (req, res) => {
 
 const UpdateUsersDetails = async (req, res) => {
     try {
-        const usersData = req.body; // Đầu vào là mảng dữ liệu người dùng cần cập nhật
+        const userData = req.body; // Đầu vào là đối tượng người dùng cần cập nhật
 
-        // Tạo một mảng chứa kết quả sau khi cập nhật cho từng người dùng
-        const updatedUsers = [];
+        const { userId, studentId } = userData;
 
-        // Duyệt qua từng người dùng trong mảng
-        for (const userData of usersData) {
-            const { userId, studentId } = userData;
+        const user = await User.findById(userId);
 
-            // Tìm người dùng dựa trên userId
-            const user = await User.findById(userId);
-
-            if (user) {
-                // Cập nhật thông tin người dùng nếu có
-                if (studentId !== undefined) {
-                    user.IDStudent = studentId;
-                }
-
-                // Lưu lại người dùng đã được cập nhật
-                const updatedUser = await user.save();
-                updatedUsers.push(updatedUser);
+        if (user) {
+            // Cập nhật thông tin người dùng nếu có
+            if (studentId !== undefined) {
+                user.IDStudent = studentId;
             }
+
+            // Lưu lại người dùng đã được cập nhật
+            const updatedUser = await user.save();
+
+            res.status(200).json({
+                success: true,
+                message: 'User details updated successfully',
+                data: updatedUser,
+            });
+        } else {
+            res.status(400).json({
+                success: false,
+                message: 'User not found',
+            });
         }
-
-        const users = await User.find({ email: { $ne: 'admin' } });
-
-        res.status(200).json({
-            success: true,
-            message: 'Users details updated successfully',
-            data: users,
-        });
     } catch (error) {
         console.error(error);
-        res.status(500).json({
+        res.status(400).json({
             success: false,
             message: 'Internal Server Error',
         });
@@ -146,11 +163,28 @@ const UpdateUsersDetails = async (req, res) => {
 
 const getAllClasses = async (req, res) => {
     try {
-        const classes = await Classroom.find();
+        const { active, pageSize, pageNumber } = req.query;
+
+        let query = {};
+
+        if (active !== undefined) {
+            query.isActived = active === 'true';
+        }
+
+        const totalClasses = await Classroom.countDocuments(query);
+        const classes = await Classroom.find(query)
+            .populate('owner', 'fullname')
+            .skip((pageNumber - 1) * pageSize)
+            .limit(Number(pageSize));
+
         if (await checkIsAdmin(req.user._id)) {
             res.status(200).json({
                 success: true,
-                data: classes,
+                data: {
+                    totalClasses,
+                    currentPage: Number(pageNumber),
+                    classes
+                },
             });
         } else {
             return res.status(400).json({
@@ -160,7 +194,7 @@ const getAllClasses = async (req, res) => {
         }
     } catch (error) {
         console.error(error);
-        res.status(500).json({
+        res.status(400).json({
             success: false,
             message: 'Internal Server Error',
         });
@@ -185,7 +219,7 @@ const getDetailClass = async (req, res) => {
         }
     } catch (error) {
         console.error(error);
-        res.status(500).json({
+        res.status(400).json({
             success: false,
             message: 'Internal Server Error',
         });
@@ -195,7 +229,7 @@ const getDetailClass = async (req, res) => {
 const toggleClassStatus = async (req, res) => {
     try {
         const { classId } = req.params;
-        const classes = await Classroom.findById(classId);
+        const classes = await Classroom.findById(classId).populate('owner', 'fullname');
         if (await checkIsAdmin(req.user._id)) {
             if (!classes) {
                 return res.status(404).json({
@@ -210,6 +244,7 @@ const toggleClassStatus = async (req, res) => {
             res.status(200).json({
                 success: true,
                 message: `Class ${classes.title} is ${classes.isActived ? 'actived' : 'inactived'}`,
+                data: classes
             });
         } else {
             return res.status(400).json({
@@ -221,7 +256,7 @@ const toggleClassStatus = async (req, res) => {
 
     } catch (error) {
         console.error(error);
-        res.status(500).json({
+        res.status(400).json({
             success: false,
             message: 'Internal Server Error',
         });
@@ -265,16 +300,20 @@ const uploadCsvFileToMapStudentID = async (req, res) => {
         }
 
         const usersData = [];
-        req.file.buffer
-            .toString()
-            .replace(/\r/g, '')
-            .split('\n')
-            .forEach(row => {
-                const [email, studentId] = row.split(',');
-                if (email && studentId) {
-                    usersData.push({ email, studentId });
-                }
-            });
+        const csvContent = req.file.buffer.toString();
+        const csvRows = csvContent.split('\n');
+
+        for (let i = 1; i < csvRows.length; i++) {
+            const row = csvRows[i].replace(/\r/g, '');
+            const [email, studentId] = row.split(',');
+
+            // Set studentId to "" if it is not present in the CSV row
+            const sanitizedStudentId = studentId || "";
+
+            if (email) {
+                usersData.push({ email, studentId: sanitizedStudentId });
+            }
+        }
 
         // Update or save STUDENTID to the database using User model
         const updatedUsers = await Promise.all(
@@ -293,21 +332,33 @@ const uploadCsvFileToMapStudentID = async (req, res) => {
             })
         );
 
-        const newdata = await User.find({ email: { $ne: 'admin' } });
+        const totalUsers = await User.countDocuments({ email: { $ne: 'admin' } });
+
+        const newdata = await User.find({ email: { $ne: 'admin' } })
+            .skip((1 - 1) * 10)
+            .limit(parseInt(10));
+
 
         res.status(200).json({
             success: true,
             message: 'StudentId updated successfully',
-            data: newdata
+            data: {
+                totalUsers,
+                currentPage: 1,
+                Userdata: newdata
+
+            },
         });
     } catch (error) {
         console.error(error);
-        res.status(500).json({
+        res.status(400).json({
             success: false,
             message: 'Internal Server Error'
         });
     }
 }
+
+
 
 module.exports = {
     getAllUsers,
